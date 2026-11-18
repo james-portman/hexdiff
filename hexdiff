@@ -1,0 +1,88 @@
+#!/usr/bin/env python
+"""
+hexdiff - side-by-side hex dump of two files, differences shown in red
+"""
+import argparse
+import os
+import sys
+
+RED = "\033[1;31m"
+RESET = "\033[0m"
+
+def fmt_side(chunk, other, width, color):
+    """Format one side's hex bytes, highlighting bytes that differ from `other`."""
+    parts = []
+    diff = False
+    for i in range(width):
+        if i and i % 8 == 0:
+            parts.append(" ")  # extra gap every 8 bytes
+        b = chunk[i] if i < len(chunk) else None
+        o = other[i] if i < len(other) else None
+        if b is None and o is None:
+            text, is_diff = "  ", False
+        elif b is None:
+            text, is_diff = "--", True
+        else:
+            text, is_diff = f"{b:02x}", b != o
+        diff |= is_diff
+        parts.append(f"{RED}{text}{RESET}" if is_diff and color else text)
+        parts.append(" ")
+    return "".join(parts)[:-1], diff
+
+
+def main():
+    p = argparse.ArgumentParser(description="Side-by-side hex diff of two files.")
+    p.add_argument("file1")
+    p.add_argument("file2")
+    p.add_argument("--red", action="store_true",
+                   help="only show lines that contain differences")
+    p.add_argument("-w", "--width", type=int, default=16,
+                   help="bytes per line per file (default 16)")
+    p.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+                   help="colorize output (default: auto = when stdout is a tty)")
+    args = p.parse_args()
+
+    color = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
+    w = max(1, args.width)
+
+    try:
+        f1 = open(args.file1, "rb")
+        f2 = open(args.file2, "rb")
+    except OSError as e:
+        sys.exit(f"hexdiff: {e}")
+
+    s1 = os.fstat(f1.fileno()).st_size
+    s2 = os.fstat(f2.fileno()).st_size
+    side_w = w * 3 - 1 + (w - 1) // 8
+    print(f"{'offset':8}  {args.file1[:side_w]:<{side_w}}  |  {args.file2[:side_w]}")
+
+    offset = 0
+    diff_lines = 0
+    try:
+        with f1, f2:
+            while True:
+                a = f1.read(w)
+                b = f2.read(w)
+                if not a and not b:
+                    break
+                left, d1 = fmt_side(a, b, w, color)
+                right, d2 = fmt_side(b, a, w, color)
+                is_diff = d1 or d2
+                diff_lines += is_diff
+                if is_diff or not args.red:
+                    off = f"{offset:08x}"
+                    if is_diff and color:
+                        off = f"{RED}{off}{RESET}"
+                    print(f"{off}  {left}  |  {right}".rstrip())
+                offset += w
+    except BrokenPipeError:
+        sys.stderr.close()
+        return 1
+
+    summary = f"sizes: {s1} vs {s2} bytes; {diff_lines} differing line(s)"
+    print(summary, file=sys.stderr)
+    return 1 if diff_lines else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
